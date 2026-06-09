@@ -1,135 +1,139 @@
 package com.yellowfinbi.api.transport;
 
-//import java.io.UnsupportedEncodingException;
-import java.util.Date;
-import java.util.concurrent.TimeUnit;
+import com.yellowfinbi.api.common.IYFServerDetails;
 
-import org.apache.hc.client5.http.classic.methods.*;
-import org.apache.hc.client5.http.config.RequestConfig;
-import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
-import org.apache.hc.client5.http.impl.classic.CloseableHttpResponse;
-import org.apache.hc.client5.http.impl.classic.HttpClients;
-import org.apache.hc.core5.http.HttpHeaders;
-//import org.apache.hc.core5.http.HttpResponse;
-import org.apache.hc.core5.http.HttpStatus;
-import org.apache.hc.core5.http.io.entity.EntityUtils;
-import org.apache.hc.core5.http.io.entity.StringEntity;
-//import org.json.JSONObject;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
+import java.util.UUID;
 
+/**
+ * Yellowfin-specific HTTP transport using the built-in java.net.http.HttpClient.
+ * Constructs the Authorization header per the Yellowfin REST API v4 spec.
+ */
 public class YFTransport {
-	
-  protected CloseableHttpClient httpClient;
-  protected HttpUriRequestBase httpMethod;
-		
-	public enum httpVerbType {
-		Get,
-		Post,
-		Put,
-		Patch,
-		Delete
-	}
-	
-	public YFTransport(httpVerbType verbtype, 			
-          String base_url,
-          String appName,
-          String entry_point,
-          String security_token,          
-          String requestBody,  // Post, Patch, Delete only            
-          int timeout) {
-		
-		super();
-		RequestConfig config = RequestConfig.custom()
-  			  .setResponseTimeout(timeout * 1000, TimeUnit.MILLISECONDS)
-  			  .setConnectionRequestTimeout(timeout * 1000, TimeUnit.MILLISECONDS).build();
-  	
-		this.httpClient = HttpClients.custom().setDefaultRequestConfig(config).build();
-  	
-  	String url;
-  			
-  	if (base_url.endsWith("/") == false) {
-  		url = base_url+"/"+entry_point;
-		} else {
-			url = base_url+entry_point;
-		}
-  	
-  	if (verbtype == httpVerbType.Get) { 
-	    	// No body!	
-	    	this.httpMethod = new HttpGet(url);	    	    
-      } else if (verbtype == httpVerbType.Post) {
-	    	// Can have a body    	    	
-	    	this.httpMethod = buildRequestWithBody(requestBody, new HttpPost(url));    	    		   
-      } else if (verbtype == httpVerbType. Put) {
-	        // Can have a body
-	        this.httpMethod = buildRequestWithBody(requestBody, new HttpPut(url));	         	
-		} else if (verbtype == httpVerbType. Patch) {
-	        // Can have a body
-	        this.httpMethod = buildRequestWithBody(requestBody, new HttpPatch(url));
-		} else if (verbtype == httpVerbType. Delete) {
-	        // No body!	
-	        this.httpMethod = new HttpDelete(url);      	
-   	}  // 
 
-      // Set headers
-      if (security_token.isBlank()) {
-          this.httpMethod.setHeader(HttpHeaders.AUTHORIZATION, appName+" ts=" + YFTransport.epoch() + ", nonce=" + java.util.UUID.randomUUID());
-      } else {
-          this.httpMethod.setHeader(HttpHeaders.AUTHORIZATION, appName+" ts=" + YFTransport.epoch() + ", nonce=" + java.util.UUID.randomUUID() + ", token=" + security_token);
-      }
-      this.httpMethod.setHeader(HttpHeaders.ACCEPT, "application/vnd.yellowfin.api-v2+json");
-      this.httpMethod.setHeader(HttpHeaders.CONTENT_TYPE, "application/json");
-		
-	}
-	
-  public static String epoch() {    	
-      //Instantiating the Date class
-   	Date date = new Date();
-   	long msec = date.getTime();
-   	return Long.toString(msec);
-  }
-  
-  public static int defaultTimeout(){
-		return 6;
-	}
-  
-  protected static HttpUriRequestBase buildRequestWithBody(String requestBody, HttpUriRequestBase Request) {
-      if (requestBody.isBlank() == false) {
-          try {
-          	// Create a request body            	
-              StringEntity stringEntity = new StringEntity(requestBody);
-              Request.setEntity(stringEntity);
-          } catch (Exception e) {
-          	// log it?
-			}    		
-  	}
-  	return Request;    	
-  }
-  
-	public YFTransportResponse execute () {
+    public enum HttpVerb { GET, POST, PUT, PATCH, DELETE }
 
-		YFTransportResponse result = new YFTransportResponse();        
-      try {
-          // Send the request
-      	CloseableHttpResponse response = httpClient.execute(httpMethod);
-      	try {
-      		result.setStatus(response.getCode());  
-      		if (response.getCode() == HttpStatus.SC_OK) {
-	                // take the response body as a json formatted string and get the token
-	                String responseData = EntityUtils.toString(response.getEntity());
-	                result.setData(responseData);
-	            }
-	                  	
-      	} finally {
-      		response.close();            
-          }        	
-      	return result;        	
-      	
-      } catch (Exception e) {        	
-      	result.setStatus(555);
-      	result.setData(e.getMessage());
-      	return result;
-      }    	
-		
-	}
+    private static final String YF_ACCEPT = "application/vnd.yellowfin.api-v2+json";
+    private static final int DEFAULT_TIMEOUT = 6;
 
+    protected final HttpClient httpClient;
+    protected final HttpRequest httpRequest;
+    private String accepts = YF_ACCEPT;
+
+    public YFTransport(HttpVerb verb,
+                       IYFServerDetails serverDetails,
+                       String endpoint,
+                       String securityToken,
+                       String requestBody) {
+        this(verb, serverDetails, endpoint, securityToken, requestBody, YF_ACCEPT);
+    }
+
+    public YFTransport(HttpVerb verb,
+                       IYFServerDetails serverDetails,
+                       String endpoint,
+                       String securityToken,
+                       String requestBody,
+                       String acceptHeader) {
+        this.accepts = acceptHeader;
+        int timeout = serverDetails.getTimeout() > 0 ? serverDetails.getTimeout() : DEFAULT_TIMEOUT;
+
+        this.httpClient = HttpClient.newBuilder()
+                .followRedirects(HttpClient.Redirect.NORMAL)
+                .connectTimeout(Duration.ofSeconds(timeout))
+                .build();
+
+        String baseUrl = serverDetails.getHostURL();
+        if (!baseUrl.endsWith("/")) baseUrl += "/";
+        String url = baseUrl + endpoint;
+
+        String authHeader = buildAuthHeader(serverDetails.getAppName(), securityToken);
+
+        HttpRequest.Builder builder = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .timeout(Duration.ofSeconds(timeout))
+                .header("Authorization", authHeader)
+                .header("Accept", this.accepts)
+                .header("Content-Type", "application/json");
+
+        HttpRequest.BodyPublisher bodyPublisher =
+                (requestBody != null && !requestBody.isBlank())
+                        ? HttpRequest.BodyPublishers.ofString(requestBody)
+                        : HttpRequest.BodyPublishers.noBody();
+
+        switch (verb) {
+            case GET:    builder.GET(); break;
+            case POST:   builder.POST(bodyPublisher); break;
+            case PUT:    builder.PUT(bodyPublisher); break;
+            case PATCH:  builder.method("PATCH", bodyPublisher); break;
+            case DELETE: builder.DELETE(); break;
+        }
+
+        this.httpRequest = builder.build();
+    }
+
+    /** Legacy constructor for backward compatibility (raw strings). */
+    public YFTransport(HttpVerb verb, String hostURL, String appName,
+                       String endpoint, String securityToken,
+                       String requestBody, int timeout) {
+        this(verb, new SimpleServerDetails(hostURL, appName, timeout),
+             endpoint, securityToken, requestBody);
+    }
+
+    public YFTransportResponse execute() {
+        YFTransportResponse result = new YFTransportResponse();
+        try {
+            HttpResponse<String> response = httpClient.send(
+                    httpRequest, HttpResponse.BodyHandlers.ofString());
+            result.setStatus(response.statusCode());
+            result.setData(response.body());
+        } catch (Exception e) {
+            result.setStatus(555);
+            result.setData(e.getMessage());
+        }
+        return result;
+    }
+
+    public byte[] executeForBytes() {
+        try {
+            HttpResponse<byte[]> response = httpClient.send(
+                    httpRequest, HttpResponse.BodyHandlers.ofByteArray());
+            if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                return response.body();
+            }
+        } catch (Exception e) { /* fall through */ }
+        return new byte[0];
+    }
+
+    public String getAccepts() { return accepts; }
+    public void setAccepts(String accepts) { this.accepts = accepts; }
+
+    public static String epoch() {
+        return Long.toString(System.currentTimeMillis());
+    }
+
+    public static int defaultTimeout() { return DEFAULT_TIMEOUT; }
+
+    private static String buildAuthHeader(String appName, String securityToken) {
+        String header = appName + " ts=" + epoch() + ", nonce=" + UUID.randomUUID();
+        if (securityToken != null && !securityToken.isBlank()) {
+            header += ", token=" + securityToken;
+        }
+        return header;
+    }
+
+    /** Minimal IYFServerDetails for the legacy constructor. */
+    private static class SimpleServerDetails implements IYFServerDetails {
+        private final String hostURL, appName;
+        private final int timeout;
+        SimpleServerDetails(String hostURL, String appName, int timeout) {
+            this.hostURL = hostURL; this.appName = appName; this.timeout = timeout;
+        }
+        @Override public String getHostURL() { return hostURL; }
+        @Override public String getAppName() { return appName; }
+        @Override public int getTimeout() { return timeout; }
+    }
 }
-
