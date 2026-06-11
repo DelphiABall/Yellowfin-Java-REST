@@ -73,7 +73,7 @@ class YFHealthImpl implements IYFHealth {
     private final YFModelList<IYFNodeInfo> nodes = new YFModelList<>(IYFNodeInfo.class, "nodes");
     static { YFFactoryRegistry.registerFactory(IYFHealth.class, YFHealthImpl::new); }
     @Override public void loadFromJSON(JSONObject json) {
-        status = YFJsonHelper.getString(json, "status", "");
+        status = YFJsonHelper.getString(json, "statusCode", "");
         nodes.loadFromJSON(json);
     }
     @Override public String getStatus() { return status; }

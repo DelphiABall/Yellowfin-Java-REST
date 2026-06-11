@@ -13,7 +13,7 @@ class YFContentItemImpl implements IYFContentItem {
 
     @Override public void loadFromJSON(JSONObject j) {
         contentId = YFJsonHelper.getLong(j, "contentId", 0);
-        contentUuid = YFJsonHelper.getString(j, "contentUuid", "");
+        contentUuid = YFJsonHelper.getString(j, "contentUUID", "");
         name = YFJsonHelper.getString(j, "name", "");
         description = YFJsonHelper.getString(j, "description", "");
         contentType = YFJsonHelper.getString(j, "contentType", "");
